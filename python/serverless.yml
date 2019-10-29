@@ -1,0 +1,164 @@
+# Welcome to Serverless!
+#
+# This file is the main config file for your service.
+# It's very minimal at this point and uses default values.
+# You can always add more config options for more control.
+# We've included some commented out config examples here.
+# Just uncomment any of them to get that config option.
+#
+# For full config options, check the docs:
+#    docs.serverless.com
+#
+# Happy Coding!
+
+service: PerfService
+# app and org for use with dashboard.serverless.com
+# app: your-app-name
+# org: your-org-name
+
+# You can pin your service to only deploy with a specific Serverless version
+# Check out our docs for more details
+# frameworkVersion: "=X.X.X"
+frameworkVersion: '>=1.55.1 <2.0.0'
+
+custom:
+  codename: stgSlipspace
+
+  # Usage plan settings.
+  usagePlan:
+    quota:
+      limit: 150000 # Allowed requests.
+      offset: 10 # Decrease the limit for this initial time period.
+      period: MONTH # Requests/period.
+    throttle:
+      burstLimit: 200 # Up to requests/second.
+      rateLimit: 100 # Requests/second.
+
+  # Mandatory tags that will be added to all resources that support tags.
+  # https://aws.amazon.com/answers/account-management/aws-tagging-strategies/
+  tags:
+    application: ${opt:application, '${self:custom.codename}'}
+
+    # Allowed values: dev, test, prod, sandbox.
+    environment: ${opt:environment, 'sandbox'}
+    customer: ${opt:customer, 'stg'}
+    applicationVersion: ${opt:applicationVersion, '1.0.0'}
+
+    # Allowed values: service, etl, messageBroker, security.
+    applicationRole: ${opt:applicationRole, 'service'}
+    infrastructureVersion: ${opt:infrastructureVersion, '1.0.0'}
+    projectCostCenter: ${opt:projectCostCenter, '662607015'}
+    operatingCostCenter: ${opt:operatingCostCenter, '662607015'}
+    owner: ${opt:owner, 'fireteamosiris@withstg.com'}
+    securityContact: ${opt:securityContact, 'fireteamosiris@withstg.com'}
+
+    # Allowed: public, private, confidential, pii/phi.
+    confidentiality: ${opt:confidentiality, 'pii/phi'}
+
+    # Allowed values: hipaa, sox, fips, other, none.
+    compliance: ${opt:compliance, 'hipaa'}
+
+    # Allowed values: optIn, optOut.
+    automateOption: ${opt:automateOption, 'optIn'}
+    automateAt: ${opt:automateAt, '9999-12-31 13:37'}
+
+provider:
+  name: aws
+  runtime: python3.7
+  memorySize: 128
+  region: us-west-2
+
+  # CloudFormation stack and API names.
+  stackName: ${opt:stackName, 'STG-Slipspace-${self:service}-Python-Sls-Stack'}
+  apiName: ${opt:apiName, 'STG-Slipspace-${self:service}-Python-Sls-Api'}
+
+  # Overwrite the default IAM role which is used for all functions.
+  role: arn:aws:iam::013535520624:role/StandardLambdaWithS3Role
+
+  # API keys to secure endpoints.
+  apiKeys:
+    - main:
+      - MAIN-${self:custom.tags.application}${self:service}PythonApiKey
+  usagePlan:
+    - main:
+      quota:
+        limit: ${self:custom.usagePlan.quota.limit}
+        offset: ${self:custom.usagePlan.quota.offset}
+        period: ${self:custom.usagePlan.quota.period}
+      throttle:
+        burstLimit: ${self:custom.usagePlan.throttle.burstLimit}
+        rateLimit: ${self:custom.usagePlan.throttle.rateLimit}
+
+  environment:
+    DYNAMODB_TABLE: ${self:custom.tags.application}${self:service}PythonNotes
+    DYNAMODB_HOST: https://dynamodb.${self:provider.region}.amazonaws.com
+    DYNAMODB_GSI_USERID_NOTEID: ${self:custom.tags.application}${self:service}-UserIdNoteId-PythonNotesIndex
+
+package:
+  exclude:
+    - .git/**
+    - .idea/**
+    - .vscode/**
+    - .pytest_cache/**
+    - tests/**
+
+functions:
+  perfservice:
+    handler: handler.hello
+    name: ${self:custom.tags.application}${self:service}PythonLambdaFunction
+    events:
+      - http:
+          path: /perfservice
+          method: ANY
+          cors: true
+          private: true
+
+resources:
+  Resources:
+
+    # Schema based on:
+    # https://stackoverflow.com/questions/47289226/dynamodb-partition-key-choice-for-notes-app
+
+    # Read Capacity:
+    # (ITEM SIZE (rounded up to the next 4KB multiplier) / 4KB) * # of items
+    # (Round up to the nearest 4 KB multiplier)
+
+    # Write Capacity
+    # (ITEM SIZE (rounded up to the next 1KB multiplier) / 1KB) * # of items
+    # (Round up to the nearest 1 KB multiplier)
+    DynamoDbTable:
+      Type: AWS::DynamoDB::Table
+
+      # If you want DB to be removed with 'sls remove' then edit this policy:
+      # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-attribute-deletionpolicy.html
+      DeletionPolicy: Delete
+      Properties:
+        TableName: ${self:provider.environment.DYNAMODB_TABLE}
+        AttributeDefinitions:
+          - AttributeName: noteId
+            AttributeType: S # String
+          - AttributeName: userId
+            AttributeType: S # String
+        KeySchema:
+          - AttributeName: noteId
+            KeyType: HASH # Partition key
+        ProvisionedThroughput:
+          ReadCapacityUnits: 10
+          WriteCapacityUnits: 1
+        GlobalSecondaryIndexes:
+
+          # To get all notes for a specified user.
+          - IndexName: ${self:provider.environment.DYNAMODB_GSI_USERID_NOTEID}
+            KeySchema:
+              - AttributeName: userId
+                KeyType: HASH # Partition key
+              - AttributeName: noteId
+                KeyType: RANGE # Sort key
+            Projection:
+              NonKeyAttributes:
+                - text
+                - notebook
+              ProjectionType: INCLUDE
+            ProvisionedThroughput:
+              ReadCapacityUnits: 10
+              WriteCapacityUnits: 1
